@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>자리 바꾸기</title>
+<style>
+  :root {
+    --bg: #0f1420;
+    --panel: #1a2233;
+    --panel-2: #232d42;
+    --line: #33405c;
+    --text: #e7ecf5;
+    --muted: #93a1bd;
+    --accent: #4f8cff;
+    --accent-2: #ffb347;
+    --good: #37c98a;
+    --bad: #ff5d6c;
+    --seat: #2b3752;
+    --seat-empty: #171f2f;
+    --desk: #3a2a5c;
+    --radius: 12px;
+    --shadow: 0 6px 20px rgba(0,0,0,.35);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: -.3px; }
+  header .spacer { flex: 1; }
+  .mode-pill {
+    font-size: 12px; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 4px 10px;
+  }
+  button {
+    font: inherit; cursor: pointer;
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 12px; transition: .12s;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.08); }
+  button.warn { border-color: var(--bad); color: #ffd7db; }
+  button.ghost { background: transparent; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.active { border-color: var(--accent-2); color: var(--accent-2); }
+
+  main { flex: 1; display: flex; min-height: 0; }
+
+  /* Sidebar */
+  aside {
+    width: 300px; background: var(--panel);
+    border-right: 1px solid var(--line);
+    padding: 14px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .section { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; background: var(--panel-2); }
+  .section h2 { font-size: 13px; margin: 0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  .row:last-child { margin-bottom: 0; }
+  label.field { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  input[type=number], input[type=text] {
+    font: inherit; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; width: 70px;
+  }
+  input[type=text] { width: 100%; }
+  .hint { font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+  /* Roster list */
+  #roster { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+  .r-item { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 4px; border-radius: 6px; }
+  .r-item.absent { opacity: .45; text-decoration: line-through; }
+  .r-item .num { width: 26px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .r-item input[type=text] { flex: 1; padding: 3px 6px; }
+  .r-item input[type=checkbox] { width: 15px; height: 15px; }
+
+  /* Stage */
+  .stage-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .toolbar {
+    display: flex; gap: 8px; padding: 10px 14px; align-items: center;
+    border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap;
+  }
+  .toolbar .spacer { flex: 1; }
+  #stage {
+    flex: 1; position: relative; overflow: hidden;
+    background:
+      radial-gradient(circle at 50% 0%, #182238, var(--bg) 70%);
+  }
+  #canvas {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+  .teacher-desk {
+    position: absolute; left: 50%; top: 18px; transform: translateX(-50%);
+    background: linear-gradient(var(--desk), #2a1f45);
+    border: 1px solid #5b47871a; border: 1px solid #6b56a0;
+    color: #e9deff; padding: 10px 26px; border-radius: 10px;
+    font-weight: 600; font-size: 14px; box-shadow: var(--shadow);
+    cursor: default; user-select: none; z-index: 5;
+  }
+  .teacher-desk.draggable { cursor: grab; }
+
+  .seat {
+    position: absolute; width: 66px; height: 54px;
+    background: var(--seat); border: 1px solid var(--line);
+    border-radius: 10px; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; user-select: none; box-shadow: var(--shadow);
+    transition: box-shadow .12s, border-color .12s, transform .06s;
+  }
+  .seat .snum { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+  .seat .sname { font-size: 11px; color: var(--muted); margin-top: 3px; max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .seat.empty { background: var(--seat-empty); }
+  .seat.empty .snum { color: var(--muted); opacity: .5; }
+  .seat.spinning .snum { color: var(--accent-2); }
+  .seat.locked { border-color: var(--good); box-shadow: 0 0 0 2px rgba(55,201,138,.35), var(--shadow); }
+  .seat.pop { animation: pop .4s ease; }
+  @keyframes pop {
+    0% { transform: scale(1); }
+    35% { transform: scale(1.22); }
+    100% { transform: scale(1); }
+  }
+  .seat.editable { cursor: grab; }
+  .seat.editable:hover { border-color: var(--accent); }
+  .seat.dragging { z-index: 30; cursor: grabbing; opacity: .92; }
+  .seat.sel-swap { border-color: var(--accent-2); box-shadow: 0 0 0 2px rgba(255,179,71,.5), var(--shadow); }
+  .seat.sel-reshuffle { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(79,140,255,.5), var(--shadow); }
+  .seat .del {
+    position: absolute; top: -8px; right: -8px; width: 20px; height: 20px;
+    border-radius: 50%; background: var(--bad); color: #fff; border: none;
+    font-size: 12px; line-height: 20px; padding: 0; display: none;
+  }
+  .seat.editable .del { display: block; }
+
+  /* Countdown overlay */
+  #overlay {
+    position: absolute; inset: 0; display: none;
+    align-items: center; justify-content: center; z-index: 40;
+    background: rgba(6,10,20,.55); backdrop-filter: blur(2px);
+    font-size: 160px; font-weight: 800; color: var(--accent-2);
+    text-shadow: 0 0 40px rgba(255,179,71,.6);
+  }
+  #overlay.show { display: flex; }
+  #overlay .cd { animation: cdpulse .9s ease; }
+  @keyframes cdpulse { 0% { transform: scale(.3); opacity: 0; } 30% { opacity: 1; } 100% { transform: scale(1.6); opacity: 0; } }
+
+  /* Confetti */
+  #confetti { position: absolute; inset: 0; pointer-events: none; z-index: 45; }
+
+  .empty-note { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 15px; pointer-events: none; }
+  .toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    padding: 10px 16px; border-radius: 10px; box-shadow: var(--shadow); z-index: 60;
+    opacity: 0; transition: opacity .2s, transform .2s; font-size: 14px;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(-4px); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎲 자리 바꾸기</h1>
+  <span class="mode-pill" id="modePill">편집 모드</span>
+  <div class="spacer"></div>
+  <button id="muteBtn" class="ghost" title="소리 켜기/끄기">🔊 소리 켬</button>
+  <button id="saveBtn" class="ghost">💾 저장</button>
+</header>
+
+<main>
+  <aside>
+    <div class="section">
+      <h2>1. 좌석 수 & 레이아웃</h2>
+      <div class="row">
+        <label class="field">좌석 수
+          <input type="number" id="seatCount" min="1" max="60" value="30" />
+        </label>
+        <button id="genGrid">격자 생성</button>
+      </div>
+      <div class="hint">좌석 수를 정하고 <b>격자 생성</b> 후, 무대에서 책상을 <b>드래그</b>해 원하는 대로 배열하세요. 책상 우상단 ✕로 삭제, <b>＋좌석</b>으로 추가.</div>
+      <div class="row" style="margin-top:8px">
+        <button id="addSeat">＋ 좌석 추가</button>
+        <button id="clearSeats" class="ghost">전체 지우기</button>
+      </div>
+      <div class="row">
+        <label class="field"><input type="checkbox" id="snap" checked /> 격자에 맞춤</label>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>2. 명단 (번호 · 결석 · 이름)</h2>
+      <div class="hint" style="margin-bottom:8px">체크 해제 = 결석(배치 제외). 이름은 선택 입력.</div>
+      <div id="roster"></div>
+    </div>
+
+    <div class="section">
+      <h2>3. 배치 실행</h2>
+      <div class="row"><button id="startBtn" class="primary" style="flex:1">🎬 자리 배치 시작</button></div>
+      <div class="hint" id="countInfo"></div>
+    </div>
+  </aside>
+
+  <div class="stage-wrap">
+    <div class="toolbar">
+      <button id="editModeBtn" class="active">✏️ 편집</button>
+      <button id="swapBtn" disabled>🔁 자리 교환</button>
+      <button id="reshuffleSelBtn" disabled>🎯 부분 재추첨</button>
+      <button id="reshuffleAllBtn" class="warn" disabled>🔄 전체 다시</button>
+      <div class="spacer"></div>
+      <span class="hint" id="statusText">책상을 배치하세요.</span>
+    </div>
+    <div id="stage">
+      <div id="canvas"></div>
+      <div class="teacher-desk" id="teacherDesk">📗 교탁</div>
+      <div class="empty-note" id="emptyNote">좌석 수를 정하고 “격자 생성”을 눌러 시작하세요.</div>
+      <div id="overlay"></div>
+      <canvas id="confetti"></canvas>
+    </div>
+  </div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+(function () {
+  // ---------- State ----------
+  const LS_KEY = "switch-seat:v1";
+  const stage = document.getElementById("stage");
+  const canvas = document.getElementById("canvas");
+  const teacherDesk = document.getElementById("teacherDesk");
+  const overlay = document.getElementById("overlay");
+  const emptyNote = document.getElementById("emptyNote");
+
+  let seats = [];      // {id, x, y, num, assigned, locked, el}
+  let roster = [];     // {num, name, present}
+  let mode = "edit";   // edit | swap | reshuffle | busy | done
+  let seatIdSeq = 1;
+  const SNAP = 20;
+
+  // ---------- Audio (WebAudio, no external files) ----------
+  const Audio = (function () {
+    let ctx = null, muted = false;
+    function ac() { if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)(); return ctx; }
+    function tone(freq, t0, dur, type, gain) {
+      const c = ac();
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = type || "sine"; o.frequency.value = freq;
+      g.gain.setValueAtTime(0, t0);
+      g.gain.linearRampToValueAtTime(gain || .2, t0 + .01);
+      g.gain.exponentialRampToValueAtTime(.0001, t0 + dur);
+      o.connect(g); g.connect(c.destination);
+      o.start(t0); o.stop(t0 + dur);
+    }
+    function noiseBurst(t0, dur, gain) {
+      const c = ac();
+      const n = Math.floor(c.sampleRate * dur);
+      const buf = c.createBuffer(1, n, c.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+      const src = c.createBufferSource(); src.buffer = buf;
+      const g = c.createGain(); g.gain.value = gain || .15;
+      const f = c.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = 1800;
+      src.connect(f); f.connect(g); g.connect(c.destination);
+      src.start(t0);
+    }
+    let drumTimer = null;
+    return {
+      resume() { if (!muted) ac().resume && ac().resume(); },
+      setMuted(m) { muted = m; if (m) this.stopDrum(); },
+      isMuted() { return muted; },
+      tick() { if (muted) return; tone(880, ac().currentTime, .05, "square", .12); },
+      countBeep(n) { if (muted) return; tone(n === 0 ? 1320 : 660, ac().currentTime, .25, "triangle", .28); },
+      confirm() { if (muted) return; const t = ac().currentTime; tone(784, t, .12, "sine", .25); tone(1175, t + .06, .16, "sine", .22); },
+      startDrum() {
+        if (muted) return;
+        this.stopDrum();
+        const step = () => { noiseBurst(ac().currentTime, .08, .12); drumTimer = setTimeout(step, 70); };
+        step();
+      },
+      stopDrum() { if (drumTimer) { clearTimeout(drumTimer); drumTimer = null; } },
+      fanfare() {
+        if (muted) return;
+        const t = ac().currentTime;
+        [523, 659, 784, 1046].forEach((f, i) => tone(f, t + i * .12, .3, "triangle", .25));
+        noiseBurst(t, .4, .1);
+      }
+    };
+  })();
+
+  // ---------- Helpers ----------
+  function toast(msg) {
+    const el = document.getElementById("toast");
+    el.textContent = msg; el.classList.add("show");
+    clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove("show"), 1800);
+  }
+  function snapVal(v) { return document.getElementById("snap").checked ? Math.round(v / SNAP) * SNAP : Math.round(v); }
+  function presentRoster() { return roster.filter(r => r.present); }
+  function setMode(m) {
+    mode = m;
+    const pill = document.getElementById("modePill");
+    const map = { edit: "편집 모드", swap: "자리 교환 모드", reshuffle: "부분 재추첨 선택", busy: "배치 진행 중…", done: "배치 완료" };
+    pill.textContent = map[m] || m;
+    document.getElementById("editModeBtn").classList.toggle("active", m === "edit");
+    document.getElementById("swapBtn").classList.toggle("active", m === "swap");
+    document.getElementById("reshuffleSelBtn").classList.toggle("active", m === "reshuffle");
+    seats.forEach(s => s.el.classList.toggle("editable", m === "edit"));
+    teacherDesk.classList.toggle("draggable", m === "edit");
+  }
+
+  // ---------- Seat rendering ----------
+  function makeSeat(x, y, num) {
+    const s = { id: seatIdSeq++, x, y, num: num || null, assigned: null, locked: false };
+    const el = document.createElement("div");
+    el.className = "seat";
+    el.innerHTML = '<button class="del" title="삭제">✕</button><div class="snum"></div><div class="sname"></div>';
+    el.style.left = x + "px"; el.style.top = y + "px";
+    s.el = el;
+    el.querySelector(".del").addEventListener("click", (e) => { e.stopPropagation(); removeSeat(s); });
+    attachSeatInteractions(s);
+    canvas.parentNode.insertBefore(el, overlay);
+    seats.push(s);
+    drawSeat(s);
+    return s;
+  }
+  function drawSeat(s) {
+    const numEl = s.el.querySelector(".snum");
+    const nameEl = s.el.querySelector(".sname");
+    if (s.assigned == null) {
+      s.el.classList.add("empty");
+      numEl.textContent = "–"; nameEl.textContent = "";
+    } else {
+      s.el.classList.remove("empty");
+      numEl.textContent = s.assigned;
+      const r = roster.find(r => r.num === s.assigned);
+      nameEl.textContent = r && r.name ? r.name : "";
+    }
+    s.el.style.left = s.x + "px"; s.el.style.top = s.y + "px";
+  }
+  function removeSeat(s) {
+    if (mode !== "edit") return;
+    s.el.remove();
+    seats = seats.filter(x => x !== s);
+    refreshEmptyNote(); persist();
+  }
+  function refreshEmptyNote() {
+    emptyNote.style.display = seats.length ? "none" : "flex";
+    updateCountInfo();
+  }
+
+  // ---------- Drag interactions (edit mode) + selection (swap/reshuffle) ----------
+  function attachSeatInteractions(s) {
+    let dragging = false, moved = false, offX = 0, offY = 0;
+    s.el.addEventListener("pointerdown", (e) => {
+      if (e.target.classList.contains("del")) return;
+      if (mode === "swap") { onSwapClick(s); return; }
+      if (mode === "reshuffle") { onReshuffleClick(s); return; }
+      if (mode !== "edit") return;
+      dragging = true; moved = false;
+      const r = stage.getBoundingClientRect();
+      offX = e.clientX - r.left - s.x;
+      offY = e.clientY - r.top - s.y;
+      s.el.setPointerCapture(e.pointerId);
+      s.el.classList.add("dragging");
+    });
+    s.el.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      const r = stage.getBoundingClientRect();
+      let nx = e.clientX - r.left - offX;
+      let ny = e.clientY - r.top - offY;
+      nx = Math.max(0, Math.min(nx, r.width - s.el.offsetWidth));
+      ny = Math.max(0, Math.min(ny, r.height - s.el.offsetHeight));
+      s.x = snapVal(nx); s.y = snapVal(ny);
+      s.el.style.left = s.x + "px"; s.el.style.top = s.y + "px";
+      moved = true;
+    });
+    s.el.addEventListener("pointerup", (e) => {
+      if (!dragging) return;
+      dragging = false; s.el.classList.remove("dragging");
+      if (moved) persist();
+    });
+  }
+
+  // Teacher desk drag
+  (function () {
+    let dragging = false, offX = 0, offY = 0;
+    teacherDesk.style.transform = "none"; // switch to left/top positioning once moved
+    let positioned = false;
+    teacherDesk.addEventListener("pointerdown", (e) => {
+      if (mode !== "edit") return;
+      dragging = true;
+      const r = stage.getBoundingClientRect();
+      const dr = teacherDesk.getBoundingClientRect();
+      offX = e.clientX - dr.left; offY = e.clientY - dr.top;
+      teacherDesk.setPointerCapture(e.pointerId);
+    });
+    teacherDesk.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      const r = stage.getBoundingClientRect();
+      let nx = e.clientX - r.left - offX;
+      let ny = e.clientY - r.top - offY;
+      nx = Math.max(0, Math.min(nx, r.width - teacherDesk.offsetWidth));
+      ny = Math.max(0, Math.min(ny, r.height - teacherDesk.offsetHeight));
+      teacherDesk.style.left = snapVal(nx) + "px";
+      teacherDesk.style.top = snapVal(ny) + "px";
+      teacherDesk.style.transform = "none";
+      positioned = true;
+    });
+    teacherDesk.addEventListener("pointerup", () => { if (dragging) { dragging = false; persist(); } });
+    teacherDesk._getPos = () => positioned ? { left: teacherDesk.style.left, top: teacherDesk.style.top } : null;
+    teacherDesk._setPos = (p) => { if (p) { teacherDesk.style.left = p.left; teacherDesk.style.top = p.top; teacherDesk.style.transform = "none"; positioned = true; } };
+  })();
+
+  // ---------- Layout generation ----------
+  function generateGrid(n) {
+    clearSeats();
+    const r = stage.getBoundingClientRect();
+    const cols = Math.min(n, Math.max(4, Math.round(Math.sqrt(n * 1.6))));
+    const rows = Math.ceil(n / cols);
+    const gapX = 88, gapY = 78;
+    const totalW = cols * gapX;
+    const startX = Math.max(20, snapVal((r.width - totalW) / 2 + 10));
+    const startY = 110;
+    let made = 0;
+    for (let row = 0; row < rows && made < n; row++) {
+      for (let col = 0; col < cols && made < n; col++) {
+        makeSeat(snapVal(startX + col * gapX), snapVal(startY + row * gapY));
+        made++;
+      }
+    }
+    refreshEmptyNote(); persist();
+  }
+  function clearSeats() {
+    seats.forEach(s => s.el.remove());
+    seats = []; refreshEmptyNote();
+  }
+
+  // ---------- Roster ----------
+  function syncRosterToCount() {
+    const n = seats.length;
+    // keep existing names/present for numbers that still exist
+    const prev = {};
+    roster.forEach(r => prev[r.num] = r);
+    roster = [];
+    for (let i = 1; i <= n; i++) {
+      roster.push(prev[i] ? prev[i] : { num: i, name: "", present: true });
+    }
+    renderRoster();
+    updateCountInfo();
+  }
+  function renderRoster() {
+    const box = document.getElementById("roster");
+    box.innerHTML = "";
+    roster.forEach(r => {
+      const item = document.createElement("div");
+      item.className = "r-item" + (r.present ? "" : " absent");
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.checked = r.present;
+      cb.addEventListener("change", () => { r.present = cb.checked; item.classList.toggle("absent", !r.present); updateCountInfo(); persist(); });
+      const num = document.createElement("span"); num.className = "num"; num.textContent = r.num;
+      const name = document.createElement("input"); name.type = "text"; name.placeholder = "이름(선택)"; name.value = r.name || "";
+      name.addEventListener("input", () => { r.name = name.value; persist(); });
+      item.append(cb, num, name);
+      box.appendChild(item);
+    });
+  }
+  function updateCountInfo() {
+    const p = presentRoster().length;
+    const info = document.getElementById("countInfo");
+    info.innerHTML = `좌석 <b>${seats.length}</b>석 · 참여 <b>${p}</b>명` +
+      (p > seats.length ? ` <span style="color:var(--bad)">(좌석 부족 ${p - seats.length})</span>` : "");
+    document.getElementById("statusText").textContent =
+      seats.length === 0 ? "책상을 배치하세요." :
+      (mode === "edit" ? "드래그로 배열을 조정하세요." :
+       mode === "done" ? "배치 완료 — 교환/재추첨 가능" :
+       document.getElementById("statusText").textContent);
+  }
+
+  // ---------- Assignment / animation ----------
+  function fisherYates(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+  const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
+  async function countdown() {
+    overlay.classList.add("show");
+    for (let n = 3; n >= 1; n--) {
+      overlay.innerHTML = '<div class="cd">' + n + '</div>';
+      Audio.countBeep(n);
+      await wait(850);
+    }
+    overlay.innerHTML = '<div class="cd" style="font-size:110px">START!</div>';
+    Audio.countBeep(0);
+    await wait(650);
+    overlay.classList.remove("show");
+  }
+
+  // Assign a given set of numbers to a given set of seats with roulette animation.
+  async function animateAssign(targetSeats, numbers) {
+    setMode("busy");
+    const assign = fisherYates(numbers);
+    // clear target seats
+    targetSeats.forEach(s => { s.assigned = null; s.locked = false; s.el.classList.remove("locked", "pop"); drawSeat(s); });
+
+    Audio.startDrum();
+    // spin phase: cycle random numbers on unlocked seats
+    const allNums = numbers.slice();
+    let spinning = targetSeats.slice();
+    const spinInterval = setInterval(() => {
+      spinning.forEach(s => {
+        s.el.classList.add("spinning");
+        s.el.querySelector(".snum").textContent = allNums[Math.floor(Math.random() * allNums.length)];
+      });
+    }, 60);
+
+    await wait(900);
+
+    // lock one by one
+    for (let i = 0; i < targetSeats.length; i++) {
+      const s = targetSeats[i];
+      spinning = spinning.filter(x => x !== s);
+      s.el.classList.remove("spinning");
+      s.assigned = assign[i] != null ? assign[i] : null;
+      s.locked = s.assigned != null;
+      drawSeat(s);
+      if (s.assigned != null) {
+        s.el.classList.add("locked", "pop");
+        Audio.confirm();
+      }
+      await wait(Math.max(120, 420 - i * 8));
+    }
+    clearInterval(spinInterval);
+    Audio.stopDrum();
+    spinning.forEach(s => s.el.classList.remove("spinning"));
+
+    burstConfetti();
+    Audio.fanfare();
+    setMode("done");
+    enablePostControls(true);
+    updateCountInfo();
+    document.getElementById("statusText").textContent = "배치 완료 🎉  교환/부분 재추첨으로 조정하세요.";
+    persist();
+  }
+
+  async function startAssignment() {
+    if (seats.length === 0) { toast("먼저 좌석을 배치하세요."); return; }
+    const nums = presentRoster().map(r => r.num);
+    if (nums.length === 0) { toast("참여 학생이 없습니다."); return; }
+    if (nums.length > seats.length) { toast(`좌석이 ${nums.length - seats.length}석 부족합니다.`); return; }
+    Audio.resume();
+    enablePostControls(false);
+    await countdown();
+    await animateAssign(seats.slice(), nums);
+  }
+
+  // ---------- Post controls: swap, partial reshuffle, redo ----------
+  let swapSel = null;
+  function onSwapClick(s) {
+    if (s.assigned == null && !swapSel) { toast("배정된 자리를 선택하세요."); return; }
+    if (!swapSel) { swapSel = s; s.el.classList.add("sel-swap"); return; }
+    if (swapSel === s) { s.el.classList.remove("sel-swap"); swapSel = null; return; }
+    // swap assignments
+    const a = swapSel.assigned, b = s.assigned;
+    swapSel.assigned = b; s.assigned = a;
+    drawSeat(swapSel); drawSeat(s);
+    swapSel.el.classList.remove("sel-swap");
+    swapSel.el.classList.add("pop"); s.el.classList.add("pop");
+    setTimeout(() => { swapSel && swapSel.el.classList.remove("pop"); s.el.classList.remove("pop"); }, 400);
+    Audio.confirm();
+    swapSel = null; persist();
+    toast("두 자리를 교환했습니다.");
+  }
+
+  const reshuffleSel = new Set();
+  function onReshuffleClick(s) {
+    if (reshuffleSel.has(s)) { reshuffleSel.delete(s); s.el.classList.remove("sel-reshuffle"); }
+    else { reshuffleSel.add(s); s.el.classList.add("sel-reshuffle"); }
+    document.getElementById("statusText").textContent = `재추첨 선택: ${reshuffleSel.size}자리 (다시 “부분 재추첨”을 눌러 실행)`;
+  }
+  async function runPartialReshuffle() {
+    const chosen = [...reshuffleSel];
+    reshuffleSel.clear();
+    chosen.forEach(s => s.el.classList.remove("sel-reshuffle"));
+    const nums = chosen.map(s => s.assigned).filter(n => n != null);
+    if (nums.length < 2) { toast("2자리 이상 선택해야 재추첨됩니다."); setMode("done"); return; }
+    Audio.resume();
+    await animateAssign(chosen, nums);
+  }
+
+  function enablePostControls(on) {
+    ["swapBtn", "reshuffleSelBtn", "reshuffleAllBtn"].forEach(id => document.getElementById(id).disabled = !on);
+  }
+
+  // ---------- Confetti ----------
+  const conf = document.getElementById("confetti");
+  const cctx = conf.getContext("2d");
+  let confParts = [], confRAF = null;
+  function sizeConf() { conf.width = stage.clientWidth; conf.height = stage.clientHeight; }
+  function burstConfetti() {
+    sizeConf();
+    const colors = ["#4f8cff", "#ffb347", "#37c98a", "#ff5d6c", "#c98af6"];
+    confParts = [];
+    for (let i = 0; i < 140; i++) {
+      confParts.push({
+        x: conf.width / 2 + (Math.random() - .5) * 200,
+        y: conf.height / 3,
+        vx: (Math.random() - .5) * 8,
+        vy: Math.random() * -9 - 3,
+        g: .25 + Math.random() * .15,
+        s: 4 + Math.random() * 6,
+        rot: Math.random() * 6.28,
+        vr: (Math.random() - .5) * .3,
+        c: colors[Math.floor(Math.random() * colors.length)],
+        life: 90 + Math.random() * 40
+      });
+    }
+    if (!confRAF) confLoop();
+  }
+  function confLoop() {
+    cctx.clearRect(0, 0, conf.width, conf.height);
+    confParts.forEach(p => {
+      p.vy += p.g; p.x += p.vx; p.y += p.vy; p.rot += p.vr; p.life--;
+      cctx.save(); cctx.translate(p.x, p.y); cctx.rotate(p.rot);
+      cctx.fillStyle = p.c; cctx.fillRect(-p.s / 2, -p.s / 2, p.s, p.s * .6);
+      cctx.restore();
+    });
+    confParts = confParts.filter(p => p.life > 0 && p.y < conf.height + 20);
+    if (confParts.length) confRAF = requestAnimationFrame(confLoop);
+    else { cctx.clearRect(0, 0, conf.width, conf.height); confRAF = null; }
+  }
+
+  // ---------- Persistence ----------
+  function persist() {
+    const data = {
+      seats: seats.map(s => ({ x: s.x, y: s.y, assigned: s.assigned, locked: s.locked })),
+      roster: roster,
+      teacher: teacherDesk._getPos(),
+      seatCount: document.getElementById("seatCount").value,
+      snap: document.getElementById("snap").checked,
+      muted: Audio.isMuted()
+    };
+    try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch (e) {}
+  }
+  function load() {
+    let data;
+    try { data = JSON.parse(localStorage.getItem(LS_KEY)); } catch (e) { data = null; }
+    if (!data) return false;
+    document.getElementById("seatCount").value = data.seatCount || 30;
+    document.getElementById("snap").checked = data.snap !== false;
+    if (data.muted) toggleMute(true);
+    clearSeats();
+    (data.seats || []).forEach(sd => {
+      const s = makeSeat(sd.x, sd.y);
+      s.assigned = sd.assigned != null ? sd.assigned : null;
+      s.locked = !!sd.locked;
+      if (s.assigned != null) { s.el.classList.add("locked"); }
+      drawSeat(s);
+    });
+    roster = (data.roster || []).map(r => ({ num: r.num, name: r.name || "", present: r.present !== false }));
+    if (roster.length !== seats.length) syncRosterToCount(); else renderRoster();
+    teacherDesk._setPos(data.teacher);
+    refreshEmptyNote();
+    const anyAssigned = seats.some(s => s.assigned != null);
+    if (anyAssigned) { setMode("done"); enablePostControls(true); }
+    updateCountInfo();
+    return true;
+  }
+
+  // ---------- Mute ----------
+  function toggleMute(force) {
+    const m = force != null ? force : !Audio.isMuted();
+    Audio.setMuted(m);
+    document.getElementById("muteBtn").textContent = m ? "🔇 소리 끔" : "🔊 소리 켬";
+    persist();
+  }
+
+  // ---------- Wire up UI ----------
+  document.getElementById("genGrid").addEventListener("click", () => {
+    const n = Math.max(1, Math.min(60, parseInt(document.getElementById("seatCount").value) || 0));
+    setMode("edit"); enablePostControls(false);
+    generateGrid(n); syncRosterToCount();
+    toast(`${n}석 격자 생성 — 드래그로 배열하세요.`);
+  });
+  document.getElementById("addSeat").addEventListener("click", () => {
+    setMode("edit");
+    const r = stage.getBoundingClientRect();
+    makeSeat(snapVal(r.width / 2 - 33), snapVal(r.height / 2));
+    document.getElementById("seatCount").value = seats.length;
+    syncRosterToCount(); refreshEmptyNote(); persist();
+  });
+  document.getElementById("clearSeats").addEventListener("click", () => {
+    if (!confirm("모든 좌석을 지울까요?")) return;
+    clearSeats(); syncRosterToCount(); persist();
+  });
+  document.getElementById("snap").addEventListener("change", persist);
+  document.getElementById("seatCount").addEventListener("change", persist);
+
+  document.getElementById("startBtn").addEventListener("click", startAssignment);
+  document.getElementById("editModeBtn").addEventListener("click", () => { clearSelections(); setMode("edit"); updateCountInfo(); });
+  document.getElementById("muteBtn").addEventListener("click", () => toggleMute());
+  document.getElementById("saveBtn").addEventListener("click", () => { persist(); toast("저장됨 (이 브라우저에 보관)"); });
+
+  document.getElementById("swapBtn").addEventListener("click", () => {
+    clearSelections();
+    setMode(mode === "swap" ? "done" : "swap");
+    document.getElementById("statusText").textContent = mode === "swap" ? "교환할 두 자리를 차례로 클릭하세요." : "배치 완료";
+  });
+  document.getElementById("reshuffleSelBtn").addEventListener("click", () => {
+    if (mode === "reshuffle") { runPartialReshuffle(); }
+    else { clearSelections(); setMode("reshuffle"); document.getElementById("statusText").textContent = "재추첨할 자리들을 클릭한 뒤 다시 “부분 재추첨”을 누르세요."; }
+  });
+  document.getElementById("reshuffleAllBtn").addEventListener("click", async () => {
+    if (!confirm("전체를 다시 배치할까요?")) return;
+    clearSelections();
+    const nums = presentRoster().map(r => r.num);
+    if (nums.length === 0) { toast("참여 학생이 없습니다."); return; }
+    Audio.resume(); await countdown(); await animateAssign(seats.slice(), nums);
+  });
+
+  function clearSelections() {
+    if (swapSel) { swapSel.el.classList.remove("sel-swap"); swapSel = null; }
+    reshuffleSel.forEach(s => s.el.classList.remove("sel-reshuffle")); reshuffleSel.clear();
+  }
+
+  window.addEventListener("resize", sizeConf);
+
+  // ---------- Init ----------
+  sizeConf();
+  if (!load()) {
+    setMode("edit");
+    updateCountInfo();
+  }
+})();
+</script>
+</body>
+</html>

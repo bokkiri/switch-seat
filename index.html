@@ -97,7 +97,7 @@
   }
   .toolbar .spacer { flex: 1; }
   #stage {
-    flex: 1; position: relative; overflow: hidden;
+    flex: 1; position: relative; overflow: auto;
     background:
       radial-gradient(circle at 50% 0%, #182238, var(--bg) 70%);
   }
@@ -172,15 +172,32 @@
     header h1 { font-size: 16px; }
     header button { padding: 7px 10px; font-size: 13px; }
     main { flex-direction: column; }
-    aside { width: 100%; max-height: 46vh; border-right: none; border-bottom: 1px solid var(--line); }
-    .stage-wrap { min-height: 54vh; }
-    #stage { min-height: 50vh; }
+    aside { width: 100%; max-height: 42vh; flex: 0 0 auto; border-right: none; border-bottom: 1px solid var(--line); }
+    /* min-height:0 lets these flex items shrink so #stage stays inside the viewport and scrolls internally to the bottom */
+    .stage-wrap { flex: 1 1 auto; min-height: 0; }
+    #stage { min-height: 0; }
     .toolbar { padding: 8px 10px; gap: 6px; }
     .toolbar button { padding: 7px 9px; font-size: 13px; }
     .toolbar .hint { width: 100%; order: 5; }
     .seat { width: 58px; height: 48px; }
     .seat .snum { font-size: 17px; }
   }
+
+  /* Modal */
+  .modal-back {
+    position: fixed; inset: 0; background: rgba(6,10,20,.6);
+    display: none; align-items: center; justify-content: center; z-index: 100;
+  }
+  .modal-back.show { display: flex; }
+  .modal {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 20px; width: min(360px, 90vw); box-shadow: var(--shadow);
+  }
+  .modal h3 { margin: 0 0 14px; font-size: 16px; }
+  .field2 { display: block; font-size: 13px; color: var(--muted); }
+  .field2 input { width: 100%; margin-top: 6px; }
+  .modal .hint { margin-top: 8px; }
+  .modal-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 
   .toast {
     position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
@@ -257,6 +274,19 @@
     </div>
   </div>
 </main>
+<div class="modal-back" id="pdfModal">
+  <div class="modal">
+    <h3>📄 PDF로 저장</h3>
+    <label class="field2">학년 · 반 (선택)
+      <input type="text" id="classInput" placeholder="예: 3학년 2반" maxlength="30" />
+    </label>
+    <div class="hint">입력한 내용이 배치표 제목과 파일명에 들어갑니다.</div>
+    <div class="modal-btns">
+      <button id="pdfCancel" class="ghost">취소</button>
+      <button id="pdfConfirm" class="primary">저장</button>
+    </div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -356,40 +386,107 @@
     ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
   }
 
+  const CHART_FONT = "-apple-system,'Apple SD Gothic Neo','Malgun Gothic',sans-serif";
+  const clampN = (v, lo, hi) => Math.round(Math.min(Math.max(v, lo), hi));
+  function fitText(ctx, text, maxW) {
+    if (ctx.measureText(text).width <= maxW) return text;
+    let t = text;
+    while (t.length > 1 && ctx.measureText(t + "…").width > maxW) t = t.slice(0, -1);
+    return t + "…";
+  }
+
   // Render seating chart to an offscreen canvas (system fonts render Korean names).
-  function renderChartCanvas() {
+  function renderChartCanvas(classLabel) {
     const { items, minX, minY, maxX, maxY } = collectChart();
-    const pad = 24, bw = (maxX - minX) + pad * 2, bh = (maxY - minY) + pad * 2;
-    const DPR = 2, targetW = 1400, scale = targetW / bw, chartH = bh * scale, headerH = 90;
+    const pad = 30, bw = (maxX - minX) + pad * 2, bh = (maxY - minY) + pad * 2;
+    const hasClass = !!(classLabel && classLabel.trim());
+    const headerH = hasClass ? 152 : 108, footerH = 40;
+    const DPR = 2, targetW = 1500, scale = targetW / bw, chartH = bh * scale;
     const cv = document.createElement("canvas");
-    cv.width = Math.round(targetW * DPR); cv.height = Math.round((chartH + headerH) * DPR);
+    cv.width = Math.round(targetW * DPR); cv.height = Math.round((chartH + headerH + footerH) * DPR);
     const ctx = cv.getContext("2d"); ctx.scale(DPR, DPR);
-    ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, targetW, chartH + headerH);
-    const F = "-apple-system,'Apple SD Gothic Neo','Malgun Gothic',sans-serif";
+    const F = CHART_FONT;
+    // page background
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, targetW, chartH + headerH + footerH);
+
+    // header
     const placed = seats.filter(s => s.assigned != null).length;
-    ctx.fillStyle = "#111"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.font = "800 34px " + F; ctx.fillText("자리 배치표", targetW / 2, 34);
-    ctx.fillStyle = "#666"; ctx.font = "400 15px " + F;
-    ctx.fillText(new Date().toLocaleDateString("ko-KR") + " · 배치 " + placed + "명 / 좌석 " + seats.length + "석", targetW / 2, 64);
+    const now = new Date();
+    const dateStr = now.toLocaleDateString("ko-KR") + " " + String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
+    ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+    let hy;
+    if (hasClass) {
+      // 학년·반 — primary, large & bold
+      hy = 58; ctx.fillStyle = "#0f172a"; ctx.font = "800 46px " + F;
+      ctx.fillText(classLabel.trim(), targetW / 2, hy);
+      // 자리 배치표 — secondary, small
+      hy += 30; ctx.fillStyle = "#64748b"; ctx.font = "600 18px " + F;
+      ctx.fillText("자리 배치표", targetW / 2, hy);
+      hy += 24; ctx.fillStyle = "#94a3b8"; ctx.font = "400 15px " + F;
+      ctx.fillText(dateStr + "  ·  배치 " + placed + "명 / 좌석 " + seats.length + "석", targetW / 2, hy);
+    } else {
+      hy = 50; ctx.fillStyle = "#0f172a"; ctx.font = "800 38px " + F;
+      ctx.fillText("자리 배치표", targetW / 2, hy);
+      hy += 28; ctx.fillStyle = "#64748b"; ctx.font = "400 16px " + F;
+      ctx.fillText(dateStr + "  ·  배치 " + placed + "명 / 좌석 " + seats.length + "석", targetW / 2, hy);
+    }
+    ctx.strokeStyle = "#e5e7eb"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(48, headerH - 18); ctx.lineTo(targetW - 48, headerH - 18); ctx.stroke();
+
+    // chart
     ctx.save(); ctx.translate(0, headerH);
     items.forEach(it => {
       const x = (it.x - minX + pad) * scale, y = (it.y - minY + pad) * scale, w = it.w * scale, h = it.h * scale;
       if (it.type === "desk") {
-        ctx.fillStyle = "#ececec"; ctx.strokeStyle = "#888"; ctx.lineWidth = 1.5;
-        roundRectPath(ctx, x, y, w, h, 8); ctx.fill(); ctx.stroke();
-        ctx.fillStyle = "#111"; ctx.font = "700 15px " + F; ctx.fillText("교탁", x + w / 2, y + h / 2);
+        ctx.fillStyle = "#eef2ff"; ctx.strokeStyle = "#a5b4fc"; ctx.lineWidth = 1.6;
+        roundRectPath(ctx, x, y, w, h, 10); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = "#4338ca"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.font = "700 " + clampN(h * 0.34, 13, 20) + "px " + F;
+        ctx.fillText("교탁", x + w / 2, y + h / 2 + 1);
+        return;
+      }
+      const s = it.seat, empty = s.assigned == null;
+      // cell
+      ctx.fillStyle = empty ? "#f8fafc" : "#ffffff";
+      ctx.strokeStyle = empty ? "#d1d5db" : "#94a3b8";
+      ctx.lineWidth = empty ? 1.2 : 1.6;
+      ctx.setLineDash(empty ? [5, 4] : []);
+      roundRectPath(ctx, x, y, w, h, 11); ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
+
+      if (empty) {
+        ctx.fillStyle = "#c7ccd6"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.font = "700 " + clampN(h * 0.4, 14, 30) + "px " + F;
+        ctx.fillText("–", x + w / 2, y + h / 2);
+        return;
+      }
+      const r = roster.find(r => r.num === s.assigned), nm = r && r.name ? r.name : "";
+      if (nm) {
+        // number badge (top-left) — secondary, but readable
+        const bf = clampN(h * 0.3, 12, 19);
+        ctx.font = "700 " + bf + "px " + F; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+        const label = String(s.assigned), lw = ctx.measureText(label).width;
+        const padX = 7, badgeH = bf + 8, badgeW = lw + padX * 2, bx = x + 7, by = y + 7;
+        ctx.fillStyle = "#eef2f7"; roundRectPath(ctx, bx, by, badgeW, badgeH, badgeH / 2); ctx.fill();
+        ctx.fillStyle = "#64748b"; ctx.fillText(label, bx + padX, by + badgeH / 2 + 0.5);
+        // name — primary: larger + heavier than the number
+        const nf = clampN(h * 0.4, 15, 30);
+        ctx.font = "800 " + nf + "px " + F; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillStyle = "#0f172a";
+        ctx.fillText(fitText(ctx, nm, w - 12), x + w / 2, y + h * 0.63);
       } else {
-        const s = it.seat, empty = s.assigned == null;
-        ctx.fillStyle = "#fff"; ctx.strokeStyle = empty ? "#bbb" : "#333"; ctx.lineWidth = 1.5;
-        ctx.setLineDash(empty ? [5, 4] : []);
-        roundRectPath(ctx, x, y, w, h, 8); ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
-        const r = roster.find(r => r.num === s.assigned), nm = r && r.name ? r.name : "";
-        ctx.fillStyle = empty ? "#bbb" : "#111"; ctx.font = "800 22px " + F;
-        ctx.fillText(empty ? "–" : String(s.assigned), x + w / 2, y + h / 2 + (nm ? -7 : 0));
-        if (nm) { ctx.fillStyle = "#444"; ctx.font = "400 12px " + F; ctx.fillText(nm.length > 6 ? nm.slice(0, 6) + "…" : nm, x + w / 2, y + h / 2 + 12); }
+        // number only — centered, large
+        const nf = clampN(h * 0.52, 18, 38);
+        ctx.font = "800 " + nf + "px " + F; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillStyle = "#0f172a";
+        ctx.fillText(String(s.assigned), x + w / 2, y + h / 2);
       }
     });
     ctx.restore();
+
+    // footer
+    ctx.fillStyle = "#94a3b8"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = "400 12px " + F;
+    ctx.fillText("자리 바꾸기 · " + dateStr, targetW / 2, chartH + headerH + footerH / 2);
     return cv;
   }
   function b64ToBytes(b64) {
@@ -423,18 +520,31 @@
     for (const p of parts) { out.set(p, o); o += p.length; }
     return out;
   }
-  function todayStr() { const d = new Date(); return "" + d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0"); }
+  function stampStr() {
+    const d = new Date(), p = n => String(n).padStart(2, "0");
+    return "" + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "_" + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+  }
 
-  // One-click PDF download.
-  function exportPDF() {
+  let classLabel = "";
+  function openPdfModal() {
     if (!seats.length) { toast("먼저 좌석을 배치하세요."); return; }
+    const inp = document.getElementById("classInput");
+    inp.value = classLabel;
+    document.getElementById("pdfModal").classList.add("show");
+    setTimeout(() => inp.focus(), 30);
+  }
+  function closePdfModal() { document.getElementById("pdfModal").classList.remove("show"); }
+
+  // Generate PDF (with optional 학년·반 label) and auto-download.
+  function doExportPDF() {
     try {
-      const cv = renderChartCanvas();
+      const cv = renderChartCanvas(classLabel);
       const b64 = cv.toDataURL("image/jpeg", 0.92).split(",")[1];
       const pdf = buildImagePDF(b64ToBytes(b64), cv.width, cv.height);
       const url = URL.createObjectURL(new Blob([pdf], { type: "application/pdf" }));
+      const safe = classLabel.trim().replace(/[\\/:*?"<>|]/g, "").replace(/\s+/g, "");
       const a = document.createElement("a");
-      a.href = url; a.download = "자리배치표_" + todayStr() + ".pdf";
+      a.href = url; a.download = "자리배치도_" + (safe ? safe + "_" : "") + stampStr() + ".pdf";
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 2000);
       toast("PDF 저장됨 📄");
@@ -610,18 +720,20 @@
       if (mode !== "edit") return;
       dragging = true; moved = false;
       const r = stage.getBoundingClientRect();
-      offX = e.clientX - r.left - s.x;
-      offY = e.clientY - r.top - s.y;
+      offX = e.clientX - r.left + stage.scrollLeft - s.x;
+      offY = e.clientY - r.top + stage.scrollTop - s.y;
       s.el.setPointerCapture(e.pointerId);
       s.el.classList.add("dragging");
     });
     s.el.addEventListener("pointermove", (e) => {
       if (!dragging) return;
       const r = stage.getBoundingClientRect();
-      let nx = e.clientX - r.left - offX;
-      let ny = e.clientY - r.top - offY;
-      nx = Math.max(0, Math.min(nx, r.width - s.el.offsetWidth));
-      ny = Math.max(0, Math.min(ny, r.height - s.el.offsetHeight));
+      let nx = e.clientX - r.left + stage.scrollLeft - offX;
+      let ny = e.clientY - r.top + stage.scrollTop - offY;
+      const maxX = Math.max(r.width, stage.scrollWidth) - s.el.offsetWidth;
+      const maxY = Math.max(r.height, stage.scrollHeight) - s.el.offsetHeight;
+      nx = Math.max(0, Math.min(nx, maxX));
+      ny = Math.max(0, Math.min(ny, maxY));
       s.x = snapVal(nx); s.y = snapVal(ny);
       s.el.style.left = s.x + "px"; s.el.style.top = s.y + "px";
       moved = true;
@@ -649,10 +761,12 @@
     teacherDesk.addEventListener("pointermove", (e) => {
       if (!dragging) return;
       const r = stage.getBoundingClientRect();
-      let nx = e.clientX - r.left - offX;
-      let ny = e.clientY - r.top - offY;
-      nx = Math.max(0, Math.min(nx, r.width - teacherDesk.offsetWidth));
-      ny = Math.max(0, Math.min(ny, r.height - teacherDesk.offsetHeight));
+      let nx = e.clientX - r.left + stage.scrollLeft - offX;
+      let ny = e.clientY - r.top + stage.scrollTop - offY;
+      const maxX = Math.max(r.width, stage.scrollWidth) - teacherDesk.offsetWidth;
+      const maxY = Math.max(r.height, stage.scrollHeight) - teacherDesk.offsetHeight;
+      nx = Math.max(0, Math.min(nx, maxX));
+      ny = Math.max(0, Math.min(ny, maxY));
       teacherDesk.style.left = snapVal(nx) + "px";
       teacherDesk.style.top = snapVal(ny) + "px";
       teacherDesk.style.transform = "none";
@@ -894,7 +1008,8 @@
       teacher: teacherDesk._getPos(),
       seatCount: document.getElementById("seatCount").value,
       snap: document.getElementById("snap").checked,
-      muted: Audio.isMuted()
+      muted: Audio.isMuted(),
+      classLabel: classLabel
     };
     try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch (e) {}
   }
@@ -904,6 +1019,7 @@
     if (!data) return false;
     document.getElementById("seatCount").value = data.seatCount || 30;
     document.getElementById("snap").checked = data.snap !== false;
+    classLabel = data.classLabel || "";
     if (data.muted) toggleMute(true);
     clearSeats();
     (data.seats || []).forEach(sd => {
@@ -955,7 +1071,17 @@
   document.getElementById("startBtn").addEventListener("click", startAssignment);
   document.getElementById("editModeBtn").addEventListener("click", () => { clearSelections(); setMode("edit"); updateCountInfo(); });
   document.getElementById("muteBtn").addEventListener("click", () => toggleMute());
-  document.getElementById("pdfBtn").addEventListener("click", exportPDF);
+  document.getElementById("pdfBtn").addEventListener("click", openPdfModal);
+  document.getElementById("pdfCancel").addEventListener("click", closePdfModal);
+  document.getElementById("pdfConfirm").addEventListener("click", () => {
+    classLabel = document.getElementById("classInput").value.trim();
+    persist(); closePdfModal(); doExportPDF();
+  });
+  document.getElementById("classInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); document.getElementById("pdfConfirm").click(); }
+    else if (e.key === "Escape") closePdfModal();
+  });
+  document.getElementById("pdfModal").addEventListener("click", (e) => { if (e.target.id === "pdfModal") closePdfModal(); });
   document.getElementById("saveBtn").addEventListener("click", () => { persist(); toast("저장됨 (이 브라우저에 보관)"); });
   document.getElementById("importBtn").addEventListener("click", () => document.getElementById("fileInput").click());
   document.getElementById("fileInput").addEventListener("change", (e) => {

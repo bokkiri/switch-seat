@@ -116,7 +116,7 @@
     font-weight: 600; font-size: 14px; box-shadow: var(--shadow);
     cursor: default; user-select: none; z-index: 5;
   }
-  .teacher-desk.draggable { cursor: grab; }
+  .teacher-desk.draggable { cursor: grab; touch-action: none; }
 
   .seat {
     position: absolute; width: 66px; height: 54px;
@@ -124,6 +124,7 @@
     border-radius: 10px; display: flex; align-items: center; justify-content: center;
     flex-direction: column; user-select: none; box-shadow: var(--shadow);
     transition: box-shadow .12s, border-color .12s, transform .06s;
+    touch-action: none;
   }
   .seat .snum { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
   .seat .sname { font-size: 11px; color: var(--muted); margin-top: 3px; max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -165,6 +166,22 @@
   #confetti { position: absolute; inset: 0; pointer-events: none; z-index: 45; }
 
   .empty-note { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 15px; pointer-events: none; }
+  /* Mobile / responsive */
+  @media (max-width: 760px) {
+    header { padding: 8px 12px; gap: 8px; }
+    header h1 { font-size: 16px; }
+    header button { padding: 7px 10px; font-size: 13px; }
+    main { flex-direction: column; }
+    aside { width: 100%; max-height: 46vh; border-right: none; border-bottom: 1px solid var(--line); }
+    .stage-wrap { min-height: 54vh; }
+    #stage { min-height: 50vh; }
+    .toolbar { padding: 8px 10px; gap: 6px; }
+    .toolbar button { padding: 7px 9px; font-size: 13px; }
+    .toolbar .hint { width: 100%; order: 5; }
+    .seat { width: 58px; height: 48px; }
+    .seat .snum { font-size: 17px; }
+  }
+
   .toast {
     position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
     background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
@@ -180,6 +197,7 @@
   <span class="mode-pill" id="modePill">편집 모드</span>
   <div class="spacer"></div>
   <button id="muteBtn" class="ghost" title="소리 켜기/끄기">🔊 소리 켬</button>
+  <button id="pdfBtn" class="ghost" title="현재 배치를 PDF로 저장">📄 PDF</button>
   <button id="saveBtn" class="ghost">💾 저장</button>
 </header>
 
@@ -206,6 +224,11 @@
     <div class="section">
       <h2>2. 명단 (번호 · 결석 · 이름)</h2>
       <div class="hint" style="margin-bottom:8px">체크 해제 = 결석(배치 제외). 이름은 선택 입력.</div>
+      <div class="row">
+        <button id="importBtn">📥 엑셀/CSV 명단</button>
+        <input type="file" id="fileInput" accept=".xlsx,.csv" style="display:none" />
+      </div>
+      <div class="hint" style="margin:2px 0 8px">A열=번호, B열=이름 (또는 이름만 한 열). 번호 있으면 번호대로, 없으면 순서대로 입력.</div>
       <div id="roster"></div>
     </div>
 
@@ -309,7 +332,221 @@
     el.textContent = msg; el.classList.add("show");
     clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove("show"), 1800);
   }
+  function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
   function snapVal(v) { return document.getElementById("snap").checked ? Math.round(v / SNAP) * SNAP : Math.round(v); }
+
+  // ---------- Chart geometry ----------
+  function collectChart() {
+    const sr = stage.getBoundingClientRect();
+    const items = [];
+    const td = teacherDesk.getBoundingClientRect();
+    items.push({ type: "desk", x: td.left - sr.left, y: td.top - sr.top, w: td.width, h: td.height });
+    seats.forEach(s => {
+      const r = s.el.getBoundingClientRect();
+      items.push({ type: "seat", x: r.left - sr.left, y: r.top - sr.top, w: r.width, h: r.height, seat: s });
+    });
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    items.forEach(it => { minX = Math.min(minX, it.x); minY = Math.min(minY, it.y); maxX = Math.max(maxX, it.x + it.w); maxY = Math.max(maxY, it.y + it.h); });
+    return { items, minX, minY, maxX, maxY };
+  }
+  function roundRectPath(ctx, x, y, w, h, r) {
+    if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); return; }
+    ctx.beginPath(); ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  }
+
+  // Render seating chart to an offscreen canvas (system fonts render Korean names).
+  function renderChartCanvas() {
+    const { items, minX, minY, maxX, maxY } = collectChart();
+    const pad = 24, bw = (maxX - minX) + pad * 2, bh = (maxY - minY) + pad * 2;
+    const DPR = 2, targetW = 1400, scale = targetW / bw, chartH = bh * scale, headerH = 90;
+    const cv = document.createElement("canvas");
+    cv.width = Math.round(targetW * DPR); cv.height = Math.round((chartH + headerH) * DPR);
+    const ctx = cv.getContext("2d"); ctx.scale(DPR, DPR);
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, targetW, chartH + headerH);
+    const F = "-apple-system,'Apple SD Gothic Neo','Malgun Gothic',sans-serif";
+    const placed = seats.filter(s => s.assigned != null).length;
+    ctx.fillStyle = "#111"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = "800 34px " + F; ctx.fillText("자리 배치표", targetW / 2, 34);
+    ctx.fillStyle = "#666"; ctx.font = "400 15px " + F;
+    ctx.fillText(new Date().toLocaleDateString("ko-KR") + " · 배치 " + placed + "명 / 좌석 " + seats.length + "석", targetW / 2, 64);
+    ctx.save(); ctx.translate(0, headerH);
+    items.forEach(it => {
+      const x = (it.x - minX + pad) * scale, y = (it.y - minY + pad) * scale, w = it.w * scale, h = it.h * scale;
+      if (it.type === "desk") {
+        ctx.fillStyle = "#ececec"; ctx.strokeStyle = "#888"; ctx.lineWidth = 1.5;
+        roundRectPath(ctx, x, y, w, h, 8); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = "#111"; ctx.font = "700 15px " + F; ctx.fillText("교탁", x + w / 2, y + h / 2);
+      } else {
+        const s = it.seat, empty = s.assigned == null;
+        ctx.fillStyle = "#fff"; ctx.strokeStyle = empty ? "#bbb" : "#333"; ctx.lineWidth = 1.5;
+        ctx.setLineDash(empty ? [5, 4] : []);
+        roundRectPath(ctx, x, y, w, h, 8); ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
+        const r = roster.find(r => r.num === s.assigned), nm = r && r.name ? r.name : "";
+        ctx.fillStyle = empty ? "#bbb" : "#111"; ctx.font = "800 22px " + F;
+        ctx.fillText(empty ? "–" : String(s.assigned), x + w / 2, y + h / 2 + (nm ? -7 : 0));
+        if (nm) { ctx.fillStyle = "#444"; ctx.font = "400 12px " + F; ctx.fillText(nm.length > 6 ? nm.slice(0, 6) + "…" : nm, x + w / 2, y + h / 2 + 12); }
+      }
+    });
+    ctx.restore();
+    return cv;
+  }
+  function b64ToBytes(b64) {
+    const bin = atob(b64), len = bin.length, out = new Uint8Array(len);
+    for (let i = 0; i < len; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  // Minimal single-image PDF (JPEG via DCTDecode) — no external library.
+  function buildImagePDF(jpeg, iw, ih) {
+    const A4W = 842, A4H = 595, margin = 24;
+    const sc = Math.min((A4W - margin * 2) / iw, (A4H - margin * 2) / ih);
+    const dw = iw * sc, dh = ih * sc, dx = (A4W - dw) / 2, dy = (A4H - dh) / 2;
+    const enc = new TextEncoder(); const parts = []; let length = 0; const offsets = [];
+    const push = (str) => { const b = enc.encode(str); parts.push(b); length += b.length; };
+    const pushBin = (b) => { parts.push(b); length += b.length; };
+    const mark = () => offsets.push(length);
+    push("%PDF-1.4\n");
+    mark(); push("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    mark(); push("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+    mark(); push("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + A4W + " " + A4H + "] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>\nendobj\n");
+    const content = "q\n" + dw.toFixed(2) + " 0 0 " + dh.toFixed(2) + " " + dx.toFixed(2) + " " + dy.toFixed(2) + " cm\n/Im0 Do\nQ\n";
+    mark(); push("4 0 obj\n<< /Length " + content.length + " >>\nstream\n" + content + "endstream\nendobj\n");
+    mark(); push("5 0 obj\n<< /Type /XObject /Subtype /Image /Width " + iw + " /Height " + ih + " /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length " + jpeg.length + " >>\nstream\n");
+    pushBin(jpeg); push("\nendstream\nendobj\n");
+    const xrefOff = length;
+    let xref = "xref\n0 6\n0000000000 65535 f \n";
+    for (let i = 0; i < 5; i++) xref += String(offsets[i]).padStart(10, "0") + " 00000 n \n";
+    push(xref);
+    push("trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n" + xrefOff + "\n%%EOF");
+    const out = new Uint8Array(length); let o = 0;
+    for (const p of parts) { out.set(p, o); o += p.length; }
+    return out;
+  }
+  function todayStr() { const d = new Date(); return "" + d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0"); }
+
+  // One-click PDF download.
+  function exportPDF() {
+    if (!seats.length) { toast("먼저 좌석을 배치하세요."); return; }
+    try {
+      const cv = renderChartCanvas();
+      const b64 = cv.toDataURL("image/jpeg", 0.92).split(",")[1];
+      const pdf = buildImagePDF(b64ToBytes(b64), cv.width, cv.height);
+      const url = URL.createObjectURL(new Blob([pdf], { type: "application/pdf" }));
+      const a = document.createElement("a");
+      a.href = url; a.download = "자리배치표_" + todayStr() + ".pdf";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      toast("PDF 저장됨 📄");
+    } catch (e) { toast("PDF 생성 오류: " + e.message); }
+  }
+
+  // ---------- Excel(.xlsx)/CSV roster import (no external library) ----------
+  async function inflateRaw(bytes) {
+    const ds = new DecompressionStream("deflate-raw");
+    const stream = new Blob([bytes]).stream().pipeThrough(ds);
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+  async function unzip(buf) {
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    let eocd = -1;
+    for (let i = buf.length - 22; i >= 0; i--) { if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; } }
+    if (eocd < 0) throw new Error("올바른 xlsx(zip)가 아닙니다");
+    const count = dv.getUint16(eocd + 10, true);
+    let ptr = dv.getUint32(eocd + 16, true);
+    const files = {};
+    for (let n = 0; n < count; n++) {
+      if (dv.getUint32(ptr, true) !== 0x02014b50) break;
+      const method = dv.getUint16(ptr + 10, true);
+      const compSize = dv.getUint32(ptr + 20, true);
+      const nameLen = dv.getUint16(ptr + 28, true);
+      const extraLen = dv.getUint16(ptr + 30, true);
+      const commLen = dv.getUint16(ptr + 32, true);
+      const localOff = dv.getUint32(ptr + 42, true);
+      const name = new TextDecoder().decode(buf.subarray(ptr + 46, ptr + 46 + nameLen));
+      const lNameLen = dv.getUint16(localOff + 26, true);
+      const lExtraLen = dv.getUint16(localOff + 28, true);
+      const dataStart = localOff + 30 + lNameLen + lExtraLen;
+      files[name] = { method, comp: buf.subarray(dataStart, dataStart + compSize) };
+      ptr += 46 + nameLen + extraLen + commLen;
+    }
+    return files;
+  }
+  async function readEntry(files, name) {
+    const f = files[name]; if (!f) return null;
+    const bytes = f.method === 8 ? await inflateRaw(f.comp) : f.comp;
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+  function colIndex(ref) {
+    const m = /^([A-Z]+)/.exec(ref || ""); if (!m) return -1;
+    let n = 0; for (const ch of m[1]) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1;
+  }
+  async function parseXlsx(buf) {
+    const files = await unzip(buf);
+    const ssXml = await readEntry(files, "xl/sharedStrings.xml");
+    const sst = [];
+    if (ssXml) {
+      const d = new DOMParser().parseFromString(ssXml, "application/xml");
+      const sis = d.getElementsByTagName("si");
+      for (let i = 0; i < sis.length; i++) sst.push(sis[i].textContent);
+    }
+    let sheetName = "xl/worksheets/sheet1.xml";
+    if (!files[sheetName]) { const k = Object.keys(files).find(k => /^xl\/worksheets\/sheet.*\.xml$/.test(k)); if (k) sheetName = k; }
+    const shXml = await readEntry(files, sheetName);
+    if (!shXml) throw new Error("워크시트를 찾지 못했습니다");
+    const d = new DOMParser().parseFromString(shXml, "application/xml");
+    const rowsEl = d.getElementsByTagName("row"), rows = [];
+    for (let i = 0; i < rowsEl.length; i++) {
+      const cells = rowsEl[i].getElementsByTagName("c"), row = [];
+      for (let j = 0; j < cells.length; j++) {
+        const c = cells[j], ci = colIndex(c.getAttribute("r")), t = c.getAttribute("t");
+        const vEl = c.getElementsByTagName("v")[0], tEl = c.getElementsByTagName("t")[0];
+        let v = "";
+        if (t === "s") v = vEl ? (sst[+vEl.textContent] || "") : "";
+        else if (t === "inlineStr") v = tEl ? tEl.textContent : "";
+        else v = vEl ? vEl.textContent : (tEl ? tEl.textContent : "");
+        if (ci >= 0) row[ci] = v;
+      }
+      rows.push(row);
+    }
+    return rows;
+  }
+  function parseCSV(text) {
+    return text.replace(/\r/g, "").split("\n").filter(l => l.trim() !== "").map(l => l.split(",").map(x => x.trim()));
+  }
+  const HEADER_TOKENS = ["번호", "이름", "성명", "name", "number", "no", "no.", "학번", "순번"];
+  function toPairs(rows) {
+    const out = []; let hasNum = false;
+    rows.forEach((r, idx) => {
+      const a = (r[0] != null ? r[0] : "").toString().trim();
+      const b = (r[1] != null ? r[1] : "").toString().trim();
+      if (a === "" && b === "") return;
+      if (idx === 0 && (HEADER_TOKENS.includes(a.toLowerCase()) || HEADER_TOKENS.includes(b.toLowerCase()))) return;
+      const n = parseInt(a, 10);
+      if (!isNaN(n) && String(n) === a) { out.push({ num: n, name: b }); hasNum = true; }
+      else { out.push({ num: null, name: b || a }); }
+    });
+    return { hasNum, out };
+  }
+  function applyRosterNames(rows) {
+    const { hasNum, out } = toPairs(rows);
+    if (out.length === 0) { toast("명단을 읽지 못했습니다."); return; }
+    if (hasNum) {
+      let hit = 0;
+      out.forEach(p => { if (p.num != null) { const r = roster.find(r => r.num === p.num); if (r) { r.name = p.name; hit++; } } });
+      renderRoster(); persist(); toast("이름 " + hit + "건 번호대로 입력됨");
+    } else {
+      let i = 0; out.forEach(p => { if (i < roster.length) { roster[i].name = p.name; i++; } });
+      renderRoster(); persist(); toast("이름 " + i + "건 순서대로 입력됨");
+    }
+  }
+  async function importFile(file) {
+    try {
+      const buf = new Uint8Array(await file.arrayBuffer());
+      const rows = /\.csv$/i.test(file.name) ? parseCSV(new TextDecoder("utf-8").decode(buf)) : await parseXlsx(buf);
+      applyRosterNames(rows);
+    } catch (e) { toast("가져오기 오류: " + e.message); }
+  }
   function presentRoster() { return roster.filter(r => r.present); }
   function setMode(m) {
     mode = m;
@@ -718,7 +955,14 @@
   document.getElementById("startBtn").addEventListener("click", startAssignment);
   document.getElementById("editModeBtn").addEventListener("click", () => { clearSelections(); setMode("edit"); updateCountInfo(); });
   document.getElementById("muteBtn").addEventListener("click", () => toggleMute());
+  document.getElementById("pdfBtn").addEventListener("click", exportPDF);
   document.getElementById("saveBtn").addEventListener("click", () => { persist(); toast("저장됨 (이 브라우저에 보관)"); });
+  document.getElementById("importBtn").addEventListener("click", () => document.getElementById("fileInput").click());
+  document.getElementById("fileInput").addEventListener("change", (e) => {
+    const f = e.target.files[0];
+    if (f) importFile(f);
+    e.target.value = "";
+  });
 
   document.getElementById("swapBtn").addEventListener("click", () => {
     clearSelections();

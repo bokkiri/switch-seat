@@ -307,7 +307,7 @@
   const SNAP = 20;
 
   // ---------- Audio (WebAudio, no external files) ----------
-  const Audio = (function () {
+  const SFX = (function () {
     let ctx = null, muted = false;
     function ac() { if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)(); return ctx; }
     function tone(freq, t0, dur, type, gain) {
@@ -362,7 +362,6 @@
     el.textContent = msg; el.classList.add("show");
     clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove("show"), 1800);
   }
-  function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
   function snapVal(v) { return document.getElementById("snap").checked ? Math.round(v / SNAP) * SNAP : Math.round(v); }
 
   // ---------- Chart geometry ----------
@@ -857,11 +856,11 @@
     overlay.classList.add("show");
     for (let n = 3; n >= 1; n--) {
       overlay.innerHTML = '<div class="cd">' + n + '</div>';
-      Audio.countBeep(n);
+      SFX.countBeep(n);
       await wait(850);
     }
     overlay.innerHTML = '<div class="cd" style="font-size:110px">START!</div>';
-    Audio.countBeep(0);
+    SFX.countBeep(0);
     await wait(650);
     overlay.classList.remove("show");
   }
@@ -873,7 +872,7 @@
     // clear target seats
     targetSeats.forEach(s => { s.assigned = null; s.locked = false; s.el.classList.remove("locked", "pop"); drawSeat(s); });
 
-    Audio.startDrum();
+    SFX.startDrum();
     // spin phase: cycle random numbers on unlocked seats
     const allNums = numbers.slice();
     let spinning = targetSeats.slice();
@@ -896,16 +895,16 @@
       drawSeat(s);
       if (s.assigned != null) {
         s.el.classList.add("locked", "pop");
-        Audio.confirm();
+        SFX.confirm();
       }
       await wait(Math.max(120, 420 - i * 8));
     }
     clearInterval(spinInterval);
-    Audio.stopDrum();
+    SFX.stopDrum();
     spinning.forEach(s => s.el.classList.remove("spinning"));
 
     burstConfetti();
-    Audio.fanfare();
+    SFX.fanfare();
     setMode("done");
     enablePostControls(true);
     updateCountInfo();
@@ -918,7 +917,7 @@
     const nums = presentRoster().map(r => r.num);
     if (nums.length === 0) { toast("참여 학생이 없습니다."); return; }
     if (nums.length > seats.length) { toast(`좌석이 ${nums.length - seats.length}석 부족합니다.`); return; }
-    Audio.resume();
+    SFX.resume();
     enablePostControls(false);
     await countdown();
     await animateAssign(seats.slice(), nums);
@@ -937,7 +936,7 @@
     swapSel.el.classList.remove("sel-swap");
     swapSel.el.classList.add("pop"); s.el.classList.add("pop");
     setTimeout(() => { swapSel && swapSel.el.classList.remove("pop"); s.el.classList.remove("pop"); }, 400);
-    Audio.confirm();
+    SFX.confirm();
     swapSel = null; persist();
     toast("두 자리를 교환했습니다.");
   }
@@ -954,7 +953,7 @@
     chosen.forEach(s => s.el.classList.remove("sel-reshuffle"));
     const nums = chosen.map(s => s.assigned).filter(n => n != null);
     if (nums.length < 2) { toast("2자리 이상 선택해야 재추첨됩니다."); setMode("done"); return; }
-    Audio.resume();
+    SFX.resume();
     await animateAssign(chosen, nums);
   }
 
@@ -1008,7 +1007,7 @@
       teacher: teacherDesk._getPos(),
       seatCount: document.getElementById("seatCount").value,
       snap: document.getElementById("snap").checked,
-      muted: Audio.isMuted(),
+      muted: SFX.isMuted(),
       classLabel: classLabel
     };
     try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch (e) {}
@@ -1020,7 +1019,6 @@
     document.getElementById("seatCount").value = data.seatCount || 30;
     document.getElementById("snap").checked = data.snap !== false;
     classLabel = data.classLabel || "";
-    if (data.muted) toggleMute(true);
     clearSeats();
     (data.seats || []).forEach(sd => {
       const s = makeSeat(sd.x, sd.y);
@@ -1036,13 +1034,15 @@
     const anyAssigned = seats.some(s => s.assigned != null);
     if (anyAssigned) { setMode("done"); enablePostControls(true); }
     updateCountInfo();
+    // restore mute last: toggleMute() persists, so seats must already be rebuilt
+    if (data.muted) toggleMute(true);
     return true;
   }
 
   // ---------- Mute ----------
   function toggleMute(force) {
-    const m = force != null ? force : !Audio.isMuted();
-    Audio.setMuted(m);
+    const m = force != null ? force : !SFX.isMuted();
+    SFX.setMuted(m);
     document.getElementById("muteBtn").textContent = m ? "🔇 소리 끔" : "🔊 소리 켬";
     persist();
   }
@@ -1055,6 +1055,7 @@
     toast(`${n}석 격자 생성 — 드래그로 배열하세요.`);
   });
   document.getElementById("addSeat").addEventListener("click", () => {
+    if (seats.length >= 60) { toast("좌석은 최대 60석까지예요."); return; }
     setMode("edit");
     const r = stage.getBoundingClientRect();
     makeSeat(snapVal(r.width / 2 - 33), snapVal(r.height / 2));
@@ -1104,7 +1105,7 @@
     clearSelections();
     const nums = presentRoster().map(r => r.num);
     if (nums.length === 0) { toast("참여 학생이 없습니다."); return; }
-    Audio.resume(); await countdown(); await animateAssign(seats.slice(), nums);
+    SFX.resume(); await countdown(); await animateAssign(seats.slice(), nums);
   });
 
   function clearSelections() {
